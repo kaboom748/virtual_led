@@ -583,7 +583,7 @@ void VirtualLedStrip::start_server_() {
     return;
   }
   this->last_beat_ = millis();
-  ESP_LOGI(TAG, "listening on port %u", this->port_);
+  ESP_LOGW(TAG, "DIAG listening on port %u (server ok)", this->port_);
 }
 
 void VirtualLedStrip::dump_config() {
@@ -762,6 +762,7 @@ void VirtualLedStrip::accept_client_() {
   auto client = this->server_->accept_loop_monitored(nullptr, nullptr);
   if (client == nullptr)
     return;
+  ESP_LOGW(TAG, "DIAG accept: client accepte");
   client->setblocking(false);
   this->pending_client_ = std::move(client);
   this->request_len_ = 0;
@@ -786,6 +787,7 @@ void VirtualLedStrip::read_request_() {
   uint8_t b[64];
   for (;;) {
     const ssize_t len = this->pending_client_->read(b, sizeof(b));
+    ESP_LOGW(TAG, "DIAG read: len=%d errno=%d", (int) len, errno);
     // 0 et -1 ne veulent PAS dire la meme chose, et les confondre gele le
     // serveur pour toujours. lwip_raw_tcp_impl.cpp est explicite:
     //   rx_closed_ && rx_buf_ == nullptr  -> return 0      (le pair est parti)
