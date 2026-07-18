@@ -751,7 +751,15 @@ void VirtualLedStrip::heartbeat_(uint32_t now) {
 void VirtualLedStrip::accept_client_() {
   if (this->server_ == nullptr || this->pending_client_ != nullptr)
     return;
-  auto client = this->server_->accept(nullptr, nullptr);
+  // accept_loop_monitored, PAS accept. Sur ESP32 (bsd_sockets) la boucle ESPHome
+  // dort sur un select(); un client accepte doit y etre enregistre, sinon select
+  // ne reveille jamais loop() quand ses octets arrivent. read() ne voit alors
+  // jamais la requete GET, renvoie -1/EWOULDBLOCK en boucle, et le client est
+  // largue comme "idle" au bout de 2 s: page blanche. L'api fait pareil (ligne
+  // 238 de api_server.cpp). Sur ESP8266 (lwip_tcp) il n'y a pas de select, la
+  // boucle tourne en continu, et accept() simple suffisait -- d'ou un bug
+  // invisible partout sauf sur ESP32.
+  auto client = this->server_->accept_loop_monitored(nullptr, nullptr);
   if (client == nullptr)
     return;
   client->setblocking(false);
