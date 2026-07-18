@@ -1,0 +1,95 @@
+# Build target for CI: proves the component compiles and links.
+esphome:
+  name: vls-esp32-arduino
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+wifi:
+  ssid: "ci"
+  password: "ci-password"
+logger:
+external_components:
+  - source:
+      type: local
+      path: ../components
+    components: [virtual_led_strip]
+light:
+  - platform: virtual_led_strip
+    id: strip
+    name: "Strip"
+    num_leds: 188
+    port: 8083
+    max_refresh_rate: 32ms
+    effects:
+      - addressable_rainbow:
+      - addressable_scan:
+      - addressable_lambda:
+          name: "Custom"
+          lambda: |-
+            it[0] = Color(255, 0, 0);
+            it.shift_left(1);
+      - addressable_lambda:
+          name: "MIRE 100"
+          update_interval: 32ms
+          lambda: |-
+            static uint32_t f, t0;
+            if (initial_run) { f = 0; t0 = millis(); }
+
+            const int32_t n = it.size();
+
+            // teinte -> RGB, 6 secteurs, zero dependance
+            auto hue = [](float h) -> Color {
+              h -= floorf(h);
+              const float x = h * 6.0f;
+              const int   s = (int) x;
+              const uint8_t a = (uint8_t) ((x - s) * 255.0f);
+              const uint8_t b = (uint8_t) (255 - a);
+              switch (s) {
+                case 0:  return Color(255, a, 0);
+                case 1:  return Color(b, 255, 0);
+                case 2:  return Color(0, 255, a);
+                case 3:  return Color(0, b, 255);
+                case 4:  return Color(a, 0, 255);
+                default: return Color(255, 0, b);
+              }
+            };
+
+            for (int32_t i = 0; i < n; i++) {
+              const int d = (i / 10) % 10;                        // quel test
+              const int u = i % 10;                               // quelle marche
+              const uint8_t v  = (uint8_t) ((u + 1) * 255 / 10);  // 25..255
+              const uint8_t lo = (uint8_t) (u + 1);               // 1..10
+
+              switch (d) {
+                case 0: it[i] = Color(v, 0, 0); break;
+                case 1: it[i] = Color(0, v, 0); break;
+                case 2: it[i] = Color(0, 0, v); break;
+                case 3: it[i] = Color(v, v, v); break;
+                case 4: it[i] = Color(lo, lo, lo); break;
+                case 5: it[i] = ((u ^ f) & 1) ? Color(255, 255, 255)
+                                              : Color::BLACK; break;
+                case 6: it[i] = (u % 3 == 0) ? Color(255, 0, 0)
+                              : (u % 3 == 1) ? Color(0, 255, 0)
+                                             : Color(0, 0, 255); break;
+                case 7: it[i] = hue(u / 10.0f); break;
+                case 8: it[i] = (u % 3 == 0) ? Color(255, 255, 0)
+                              : (u % 3 == 1) ? Color(0, 255, 255)
+                                             : Color(255, 0, 255); break;
+                default: it[i] = Color(255, 255, 255); break;
+              }
+            }
+
+            // curseur : trou noir puis point blanc, 1 LED par image
+            const int32_t c = f % n;
+            it[(c + n - 1) % n] = Color::BLACK;
+            it[c] = Color(255, 255, 255);
+
+            // une passe complete = n images -> cadence reelle
+            if (c == 0 && f > 0) {
+              const uint32_t dt = millis() - t0;
+              t0 += dt;
+              ESP_LOGI("mire", "passe: %d images en %u ms -> %.2f img/s (%.1f ms/img)",
+                       (int) n, (unsigned) dt, n * 1000.0f / dt, (float) dt / n);
+            }
+            f++;

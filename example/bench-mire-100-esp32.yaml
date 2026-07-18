@@ -1,0 +1,171 @@
+# =============================================================================
+#  MIRE 100 - tester 100 LEDs RGB en UNE SEULE IMAGE
+#
+#  Ce qui change entre 10 et 100 LEDs :
+#    10 LEDs  -> tu es oblige de coder dans le TEMPS (chaque LED son rythme,
+#                tu attends que la sequence se deroule pour conclure).
+#    100 LEDs -> tu codes dans l'ESPACE. 10 decades = 10 tests menes EN
+#                PARALLELE. Une image = un diagnostic complet. Rien a attendre.
+#
+#  Carte de la mire (decade = quel test, unite = quelle marche) :
+#
+#    d0  00-09  rampe ROUGE 25->255        canal R, linearite, marche manquante
+#    d1  10-19  rampe VERTE                canal V
+#    d2  20-29  rampe BLEUE                canal B
+#    d3  30-39  rampe BLANCHE              les 3 canaux suivent-ils ensemble ?
+#    d4  40-49  bas niveau 1..10 / 255     plancher de quantification
+#    d5  50-59  damier 0/255 a fs/2        integrite signal + ripple + img perdues
+#    d6  60-69  R V B purs                 ORDRE des canaux (rgb_order)
+#    d7  70-79  roue de teintes            continuite / banding
+#    d8  80-89  J C M purs                 melange 2 canaux
+#    d9  90-99  blanc plein 255            reference + bout du ruban
+#
+#  Lecture d'un defaut = decade + rang. "3e LED de la rampe bleue eteinte"
+#  -> LED 22, canal B mort. Tu as l'index exact sans compter le ruban.
+#
+#  + CURSEUR blanc, 1 LED par image, precede d'un trou noir (= le sens) :
+#    - passe sur CHAQUE LED au blanc plein, une par une. LED morte = trou fixe.
+#    - 1 passe = 100 images = 3,20 s a 31,25 img/s.
+#      Chronometre une passe -> tu as ta cadence reelle, sans toucher au log.
+#      (4,8 s = 20,8 img/s = tu es tombe sur le quantum de 16 ms.)
+#
+#  La carte se repete tous les 100 : marche tel quel avec num_leds: 150, 300...
+#
+#  Le SEUL defaut que la mire ne peut pas voir : la chute de tension. Il faut
+#  les 100 LEDs a fond EN MEME TEMPS, c'est physiquement incompatible avec une
+#  mire. -> effet "MUR", en dessous.
+# =============================================================================
+
+esphome:
+  name: mire-100
+  on_boot:
+    priority: -100
+    then:
+      - light.turn_on:
+          id: strip
+          brightness: 100%          # sinon tout le banc est mis a l'echelle
+          effect: "MIRE 100"
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+logger:
+  level: INFO
+  logs:
+    light: WARN                     # sinon le log noie les mesures
+
+external_components:
+  - source: github://kaboom748/virtual_led_strip
+    components: [virtual_led_strip]
+    refresh: 1d
+
+light:
+  - platform: virtual_led_strip
+    id: strip
+    name: "Bench"
+    num_leds: 100
+    port: 8083
+    default_transition_length: 0s   # bascule franche
+    max_refresh_rate: 32ms          # seuil, pas cadence -> 31,25 img/s
+    gamma_correct: 0                # OBLIGATOIRE sur un banc : pipeline brut.
+                                    # Avec le 2.8 par defaut, d4 est entierement
+                                    # noire et tes rampes ne sont plus des rampes.
+                                    # Remets 2.8 pour VOIR l'ecrasement du bas.
+    effects:
+      # ------------------------------------------------------------- MIRE
+      - addressable_lambda:
+          name: "MIRE 100"
+          update_interval: 32ms
+          lambda: |-
+            static uint32_t f, t0;
+            if (initial_run) { f = 0; t0 = millis(); }
+
+            const int32_t n = it.size();
+
+            // teinte -> RGB, 6 secteurs, zero dependance
+            auto hue = [](float h) -> Color {
+              h -= floorf(h);
+              const float x = h * 6.0f;
+              const int   s = (int) x;
+              const uint8_t a = (uint8_t) ((x - s) * 255.0f);
+              const uint8_t b = (uint8_t) (255 - a);
+              switch (s) {
+                case 0:  return Color(255, a, 0);
+                case 1:  return Color(b, 255, 0);
+                case 2:  return Color(0, 255, a);
+                case 3:  return Color(0, b, 255);
+                case 4:  return Color(a, 0, 255);
+                default: return Color(255, 0, b);
+              }
+            };
+
+            for (int32_t i = 0; i < n; i++) {
+              const int d = (i / 10) % 10;                        // quel test
+              const int u = i % 10;                               // quelle marche
+              const uint8_t v  = (uint8_t) ((u + 1) * 255 / 10);  // 25..255
+              const uint8_t lo = (uint8_t) (u + 1);               // 1..10
+
+              switch (d) {
+                case 0: it[i] = Color(v, 0, 0); break;
+                case 1: it[i] = Color(0, v, 0); break;
+                case 2: it[i] = Color(0, 0, v); break;
+                case 3: it[i] = Color(v, v, v); break;
+                case 4: it[i] = Color(lo, lo, lo); break;
+                case 5: it[i] = ((u ^ f) & 1) ? Color(255, 255, 255)
+                                              : Color::BLACK; break;
+                case 6: it[i] = (u % 3 == 0) ? Color(255, 0, 0)
+                              : (u % 3 == 1) ? Color(0, 255, 0)
+                                             : Color(0, 0, 255); break;
+                case 7: it[i] = hue(u / 10.0f); break;
+                case 8: it[i] = (u % 3 == 0) ? Color(255, 255, 0)
+                              : (u % 3 == 1) ? Color(0, 255, 255)
+                                             : Color(255, 0, 255); break;
+                default: it[i] = Color(255, 255, 255); break;
+              }
+            }
+
+            // curseur : trou noir puis point blanc, 1 LED par image
+            const int32_t c = f % n;
+            it[(c + n - 1) % n] = Color::BLACK;
+            it[c] = Color(255, 255, 255);
+
+            // une passe complete = n images -> cadence reelle
+            if (c == 0 && f > 0) {
+              const uint32_t dt = millis() - t0;
+              t0 += dt;
+              ESP_LOGI("mire", "passe: %d images en %u ms -> %.2f img/s (%.1f ms/img)",
+                       (int) n, (unsigned) dt, n * 1000.0f / dt, (float) dt / n);
+            }
+            f++;
+
+      # -------------------------------------------------------------- MUR
+      # Les 100 LEDs a fond en meme temps = ~6 A sur du WS2812.
+      # Rampe blanche 0 -> 100 % en 4 s, puis retour. Regarde le BOUT du ruban :
+      #   blanc -> jaune -> orange = le 5 V s'ecroule. Le bleu (Vf ~3,2 V) meurt
+      #   avant le rouge (Vf ~2,0 V), la derive de teinte EST le voltmetre.
+      #   Note le % ou ca part : c'est ta limite d'alim, chiffree.
+      #   Scintillement / LEDs figees en bout = alim ou signal qui lachent.
+      - addressable_lambda:
+          name: "MUR (chute de tension)"
+          update_interval: 32ms
+          lambda: |-
+            static uint32_t f;
+            if (initial_run) f = 0;
+
+            const uint32_t T = 250;                    // 8 s aller-retour
+            const uint32_t p = f % T;
+            const float x = (p < T / 2) ? (float) p / (T / 2)
+                                        : 2.0f - (float) p / (T / 2);
+            const uint8_t l = (uint8_t) (x * 255.0f);
+            it.all() = Color(l, l, l);
+
+            if (f % 25 == 0)
+              ESP_LOGI("mur", "niveau %3u / 255  (%3.0f %%)",
+                       (unsigned) l, x * 100.0f);
+            f++;

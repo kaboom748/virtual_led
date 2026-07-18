@@ -1,0 +1,35 @@
+# Point rtttl's cousin at a browser: no strip, no pin, no solder.
+#
+# Open http://<ip>:8083/ after flashing.
+esphome:
+  name: virtual-strip-esp32
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+logger:
+api:
+ota:
+  - platform: esphome
+external_components:
+  - source: github://kaboom748/virtual_led_strip
+    components: [virtual_led_strip]
+    refresh: 1d
+
+light:
+  - platform: virtual_led_strip
+    id: strip
+    name: "Shelf"
+    num_leds: 188
+    port: 8083
+    # Un SEUIL, pas une cadence: LightState::loop() le quantifie a 16 ms.
+    # 32ms -> 31,2 img/s. 33ms -> 20,9. Seuls les multiples de 16 tombent juste.
+    max_refresh_rate: 32ms
+    effects:
+      - addressable_rainbow:
+      - addressable_scan:
+      - addressable_twinkle:
+      - addressable_fireworks:
